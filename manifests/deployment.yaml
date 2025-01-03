@@ -1,0 +1,106 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: webapp-deployment
+  labels:
+    app.kubernetes.io/name: webapp
+    app.kubernetes.io/part-of: webapp
+    app.kubernetes.io/component: deployment
+spec:
+  strategy:
+    rollingUpdate:
+      maxSurge: 10%
+      maxUnavailable: 10%
+    type: RollingUpdate
+  topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: DoNotSchedule # В условиях мультизональности, в Keda SO может сработать несколько триггеров одновременно, например время+метрика - минуя масштаб. в +1 шаг
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: webapp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: webapp
+        app.kubernetes.io/part-of: webapp
+        app.kubernetes.io/component: deployment
+    spec:
+      serviceAccountName: webapp-service-account # Service Account для k8s IDP Auth против Hashicorp Vault
+      # Soft Pod anti-affinity
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: webapp
+              topologyKey: kubernetes.io/hostname
+      containers:
+      # Docker.io Container Registry
+      - image: mindbox/webapp
+        # Для внутрикластерного Container Registry с svc на NodePort
+        # - image: localhost:31000/mindbox/webapp
+        # Для внутрикластерного Container Registry с svc на ingress
+        # - image: registry.mindbox.ru/mindbox/webapp
+
+        name: webapp
+        labels:
+          app.kubernetes.io/name: webapp
+          app.kubernetes.io/part-of: webapp
+          app.kubernetes.io/component: deployment
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+        # При условии что приложение не имеет отдельный порт для пробов
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 10
+          timeoutSeconds: 3
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 10 # Холодный старт
+          timeoutSeconds: 3
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        # Cache pre-warming, предполагается что не distroless, например busybox based image
+        lifecycle:
+          postStart:
+            exec:
+              command: [ "/bin/sh", "-c", "wget -q -O- http://localhost:8080/" ]
+        # Best-practice sec. context, альтернативно на уровне пода
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+        # Хранение временных данных в overlay ноды            
+        volumeMounts:
+        - mountPath: /data
+          name: data
+        - mountPath: /vault/token
+          name: vault-token
+          subPath: vault-token
+      volumes:
+      - name: data
+        emptyDir: {}
+      - name: vault-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: "vault-token"
+              expirationSeconds: 600 # Ротация каждые 10 минут
+      restartPolicy: Always
+      imagePullPolicy: Always # Security best-pactice

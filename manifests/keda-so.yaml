@@ -1,0 +1,43 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: webapp-scaledobject
+  labels:
+    app.kubernetes.io/name: webapp
+    app.kubernetes.io/part-of: webapp
+    app.kubernetes.io/component: keda-scaledobject
+spec:
+  scaleTargetRef:
+    name: webapp-deployment
+  minReplicaCount: 3 # 3 зоны по 1 поду на зону
+  maxReplicaCount: 18 # 3 зоны по 5 подов на зону, +3 буффер
+  cooldownPeriod: 300
+  # Keda используем макс. значение из каждого триггера, в cron окно, минимум 12, если только не активируются триггеры из метрики
+  triggers:
+  - type: cron
+    metadata:
+      timezone: Europe/Moscow
+      start: 0 9 * * *
+      end: 0 18 * * *
+      desiredReplicas: "12" # 3 зоны по 4 пода
+  # Опрос каждые 30с, StabilizationWindow в 300с
+  - type: prometheus
+    metadata:
+      serverAddress: "http://prometheus-server.metrics:9090"
+      threshold: '5000' # 1 под на 5000 HTTP запросов
+      activationThreshold: '500'
+      # Сумма за 1м. деленная на количество подов
+      query: |
+        sum(rate(nginx_ingress_controller_requests{namespace="webapp",service="webapp-svc"}[1m]))
+        / 
+        count(nginx_ingress_controller_requests{namespace="webapp",service="webapp-svc"})
+  - type: prometheus
+    metadata:
+      serverAddress: "http://prometheus-server.metrics:9090"
+      threshold: "0.11" # 110Мс.
+      activationThreshold: '0.1'
+      # Сумма за 1м. деленная на количество подов
+      query: |
+        sum(rate(nginx_ingress_controller_response_duration_seconds_sum{namespace="webapp",service="webapp-svc"}[1m])) 
+        / 
+        count(nginx_ingress_controller_response_duration_seconds_sum{namespace="webapp",service="webapp-svc"})

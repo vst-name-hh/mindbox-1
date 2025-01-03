@@ -1,0 +1,15 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pdb-zone-b
+  labels:
+    app.kubernetes.io/name: webapp
+    app.kubernetes.io/part-of: webapp
+    app.kubernetes.io/component: zone-pdb
+    app.kubernetes.io/instance: zone-b
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: webapp
+      zone: zone-b
